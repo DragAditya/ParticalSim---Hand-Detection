@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neural Particle Core</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <!-- MediaPipe Hands (Using specific versions for stability) -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
+        
+        /* Cyberpunk UI Overlay */
+        .hud-overlay {
+            background: radial-gradient(circle at center, transparent 0%, rgba(0,0,0,0.4) 100%);
+            pointer-events: none;
+        }
+
+        .glass-panel {
+            background: rgba(5, 5, 5, 0.85);
+            border: 1px solid rgba(0, 255, 255, 0.1);
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.05);
+            backdrop-filter: blur(4px);
+        }
+
+        .btn-cy {
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        .btn-cy:hover {
+            background: rgba(0, 255, 255, 0.1);
+            text-shadow: 0 0 8px rgba(0, 255, 255, 0.8);
+            border-color: rgba(0, 255, 255, 0.5);
+        }
+        .btn-cy.active {
+            background: rgba(0, 255, 255, 0.2);
+            border-color: #00ffff;
+            color: #00ffff;
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.3);
+        }
+
+        #start-screen {
+            background: rgba(0,0,0,0.95);
+            z-index: 100;
+            display: flex;
+        }
+
+        .scan-line {
+            width: 100%;
+            height: 2px;
+            background: rgba(0, 255, 255, 0.5);
+            position: absolute;
+            top: 0;
+            animation: scan 3s linear infinite;
+            opacity: 0.5;
+        }
+
+        @keyframes scan {
+            0% { top: 0%; opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { top: 100%; opacity: 0; }
+        }
+
+        canvas { display: block; }
+        #video-feed { transform: scaleX(-1); opacity: 0.4; filter: grayscale(100%) contrast(1.2); }
+    </style>
+</head>
+<body>
+
+    <!-- START SCREEN (Fixes Autoplay Issues) -->
+    <div id="start-screen" class="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-auto">
+        <div class="mb-8 relative">
+            <div class="w-24 h-24 border-2 border-cyan-500 rounded-full flex items-center justify-center animate-pulse">
+                <div class="w-20 h-20 border border-cyan-800 rounded-full"></div>
+            </div>
+        </div>
+        <h1 class="text-3xl text-cyan-400 font-bold tracking-widest mb-2">NEURAL PARTICLE CORE</h1>
+        <p class="text-gray-400 mb-8 text-sm">GESTURE CONTROL INTERFACE</p>
+        <button onclick="initSystem()" class="px-8 py-3 border border-cyan-500 text-cyan-500 hover:bg-cyan-500 hover:text-black transition-all font-bold tracking-widest text-sm rounded">
+            INITIALIZE SYSTEM
+        </button>
+        <p class="text-xs text-gray-600 mt-4">Requires Camera Access</p>
+    </div>
+
+    <!-- MAIN UI -->
+    <div id="main-ui" class="absolute inset-0 z-20 pointer-events-none hidden">
+        <div class="scan-line"></div>
+        
+        <!-- Top Left Status -->
+        <div class="absolute top-4 left-4 glass-panel p-4 rounded w-64">
+            <div class="flex items-center justify-between mb-2 border-b border-gray-800 pb-2">
+                <span class="text-xs text-cyan-600">SYSTEM STATUS</span>
+                <span id="sys-status" class="text-xs text-red-500 animate-pulse">OFFLINE</span>
+            </div>
+            <div class="space-y-1 font-mono text-[10px] text-gray-400">
+                <div class="flex justify-between">
+                    <span>MODE</span>
+                    <span id="mode-display" class="text-white">STANDBY</span>
+                </div>
+                <div class="flex justify-between">
+                    <span>HANDS</span>
+                    <span id="hand-count" class="text-cyan-400">0</span>
+                </div>
+                <div class="flex justify-between">
+                    <span>FPS</span>
+                    <span id="fps-display" class="text-gray-500">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Top Right Preview -->
+        <div class="absolute top-4 right-4 glass-panel p-1 rounded w-40 h-28 overflow-hidden">
+            <video id="video-feed" class="w-full h-full object-cover" playsinline></video>
+            <canvas id="debug-canvas" class="absolute inset-0 w-full h-full object-cover" style="transform: scaleX(-1);"></canvas>
+            <div class="absolute bottom-1 right-2 text-[8px] text-cyan-500">CAM_FEED_01</div>
+        </div>
+
+        <!-- Bottom Controls -->
+        <div class="absolute bottom-8 left-1/2 transform -translate-x-1/2 glass-panel p-2 rounded-full flex gap-4 pointer-events-auto">
+            <button class="btn-cy active px-6 py-2 rounded-full text-xs font-bold border border-transparent text-gray-400" onclick="setShape('sphere')">Sphere</button>
+            <button class="btn-cy px-6 py-2 rounded-full text-xs font-bold border border-transparent text-gray-400" onclick="setShape('heart')">Heart</button>
+            <button class="btn-cy px-6 py-2 rounded-full text-xs font-bold border border-transparent text-gray-400" onclick="setShape('galaxy')">Galaxy</button>
+            <button class="btn-cy px-6 py-2 rounded-full text-xs font-bold border border-transparent text-gray-400" onclick="setShape('cube')">Cube</button>
+        </div>
+
+        <!-- Gesture Guide -->
+        <div class="absolute bottom-8 right-8 text-right space-y-2 opacity-50 hidden md:block">
+            <div class="flex items-center justify-end gap-2">
+                <span class="text-[10px] text-cyan-300">EXPAND</span>
+                <span class="w-4 h-4 border border-cyan-500 rounded-full flex items-center justify-center text-[8px] text-white">5</span>
+            </div>
+            <div class="flex items-center justify-end gap-2">
+                <span class="text-[10px] text-yellow-300">GRAVITY</span>
+                <span class="w-4 h-4 border border-yellow-500 rounded-full flex items-center justify-center text-[8px] text-white">1</span>
+            </div>
+            <div class="flex items-center justify-end gap-2">
+                <span class="text-[10px] text-red-300">COLLAPSE</span>
+                <span class="w-4 h-4 border border-red-500 rounded-full flex items-center justify-center text-[8px] text-white">0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3D Canvas -->
+    <div id="canvas-container" class="absolute inset-0 z-10"></div>
+
+    <script>
+        // --- 1. GLOBAL STATE & CONFIG ---
+        const CONFIG = {
+            particleCount: 12000,
+            particleSize: 0.12,
+            baseColor: 0x00ffff,
+            camZ: 6
+        };
+
+        const STATE = {
+            isRunning: false,
+            shape: 'sphere',
+            mode: 'IDLE', // IDLE, EXPAND, COLLAPSE, ATTRACT
+            attractPoint: new THREE.Vector3(0, 0, 0),
+            handRotation: { x: 0, y: 0 },
+            time: 0
+        };
+
+        // --- 2. THREE.JS ENGINE ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000000, 0.03);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.z = CONFIG.camZ;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+
+        // --- 3. ADVANCED PARTICLES ---
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(CONFIG.particleCount * 3);
+        const targets = new Float32Array(CONFIG.particleCount * 3);
+        const originalPos = new Float32Array(CONFIG.particleCount * 3); // For memory
+        const randomness = new Float32Array(CONFIG.particleCount); // Individual quirks
+
+        for (let i = 0; i < CONFIG.particleCount; i++) {
+            positions[i*3] = (Math.random() - 0.5) * 15;
+            positions[i*3+1] = (Math.random() - 0.5) * 15;
+            positions[i*3+2] = (Math.random() - 0.5) * 15;
+            randomness[i] = Math.random();
+        }
+        
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        
+        // Custom texture
+        const getTexture = () => {
+            const c = document.createElement('canvas');
+            c.width = 32; c.height = 32;
+            const ctx = c.getContext('2d');
+            const g = ctx.createRadialGradient(16,16,0, 16,16,16);
+            g.addColorStop(0, 'rgba(255,255,255,1)');
+            g.addColorStop(0.2, 'rgba(200,255,255,0.5)');
+            g.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(0,0,32,32);
+            return new THREE.CanvasTexture(c);
+        };
+
+        const material = new THREE.PointsMaterial({
+            size: CONFIG.particleSize,
+            map: getTexture(),
+            transparent: true,
+            opacity: 0.8,
+            color: CONFIG.baseColor,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            sizeAttenuation: true
+        });
+
+        const particles = new THREE.Points(geometry, material);
+        scene.add(particles);
+
+        // --- 4. SHAPE GENERATORS ---
+        const shapes = {
+            sphere: (i) => {
+                const phi = Math.acos(-1 + (2 * i) / CONFIG.particleCount);
+                const theta = Math.sqrt(CONFIG.particleCount * Math.PI) * phi;
+                const r = 3;
+                return [r * Math.cos(theta) * Math.sin(phi), r * Math.sin(theta) * Math.sin(phi), r * Math.cos(phi)];
+            },
+            heart: (i) => {
+                const t = (i / CONFIG.particleCount) * Math.PI * 2;
+                const r = 0.2;
+                const x = 16 * Math.pow(Math.sin(t), 3);
+                const y = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+                const z = (Math.random()-0.5) * 4;
+                return [x*r, y*r, z];
+            },
+            galaxy: (i) => {
+                const angle = i * 0.1;
+                const r = (i / CONFIG.particleCount) * 5; 
+                return [r * Math.cos(angle), (Math.random()-0.5), r * Math.sin(angle)];
+            },
+            cube: (i) => {
+                const s = 4; // size
+                // Simple random scatter within cube volume
+                return [(Math.random()-0.5)*s, (Math.random()-0.5)*s, (Math.random()-0.5)*s];
+            }
+        };
+
+        function setShape(type) {
+            STATE.shape = type;
+            const gen = shapes[type] || shapes.sphere;
+            for(let i=0; i<CONFIG.particleCount; i++) {
+                const [x, y, z] = gen(i);
+                targets[i*3] = x;
+                targets[i*3+1] = y;
+                targets[i*3+2] = z;
+                
+                // Store base target logic
+                originalPos[i*3] = x;
+                originalPos[i*3+1] = y;
+                originalPos[i*3+2] = z;
+            }
+            
+            // UI Update
+            document.querySelectorAll('.btn-cy').forEach(b => {
+                b.classList.remove('active');
+                if(b.innerText.toLowerCase() === type) b.classList.add('active');
+            });
+        }
+        setShape('sphere');
+
+        // --- 5. VISION SYSTEM (MANUAL LOOP) ---
+        const video = document.getElementById('video-feed');
+        const debugCanvas = document.getElementById('debug-canvas');
+        const debugCtx = debugCanvas.getContext('2d');
+        const statusEl = document.getElementById('sys-status');
+        const modeEl = document.getElementById('mode-display');
+
+        async function initSystem() {
+            document.getElementById('start-screen').style.display = 'none';
+            document.getElementById('main-ui').classList.remove('hidden');
+            
+            statusEl.innerText = "INITIALIZING...";
+            statusEl.className = "text-xs text-yellow-500 animate-pulse";
+
+            try {
+                // 1. Setup MediaPipe Hands
+                const hands = new Hands({locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`;
+                }});
+
+                hands.setOptions({
+                    maxNumHands: 1,
+                    modelComplexity: 0, // Lite for speed
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+
+                hands.onResults(onHandsResults);
+
+                // 2. Setup Camera Stream Manually
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 360, facingMode: 'user' }
+                });
+                
+                video.srcObject = stream;
+                await video.play();
+
+                statusEl.innerText = "ONLINE (SEARCHING)";
+                statusEl.className = "text-xs text-green-500";
+
+                // 3. Start Detection Loop
+                async function detectLoop() {
+                    if (video.readyState >= 2) {
+                        await hands.send({image: video});
+                    }
+                    requestAnimationFrame(detectLoop);
+                }
+                detectLoop();
+
+                // 4. Start Render Loop
+                STATE.isRunning = true;
+                animate();
+
+            } catch (err) {
+                console.error(err);
+                statusEl.innerText = "ERROR: " + err.message;
+                statusEl.className = "text-xs text-red-500";
+                alert("Camera access denied or system incompatible. Please refresh and allow permissions.");
+            }
+        }
+
+        function onHandsResults(results) {
+            // Debug Draw
+            debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
+            
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const lm = results.multiHandLandmarks[0];
+                drawConnectors(debugCtx, lm, HAND_CONNECTIONS, {color: '#00ffff', lineWidth: 2});
+                
+                statusEl.innerText = "TARGET LOCKED";
+                statusEl.className = "text-xs text-cyan-400 font-bold";
+                document.getElementById('hand-count').innerText = "1";
+
+                // LOGIC
+                // 1. Hand Rotation (Palm Center)
+                const palmX = (lm[0].x - 0.5) * 2;
+                const palmY = (lm[0].y - 0.5) * 2;
+                STATE.handRotation.y = -palmX * 2.0;
+                STATE.handRotation.x = -palmY * 1.5;
+
+                // 2. Gesture Detection
+                // Count fingers up
+                const tips = [8, 12, 16, 20];
+                const dips = [6, 10, 14, 18];
+                let fingersUp = 0;
+                tips.forEach((t, i) => { if(lm[t].y < lm[dips[i]].y) fingersUp++; });
+                if(Math.abs(lm[4].x - lm[17].x) > 0.15) fingersUp++; // Thumb roughly
+
+                // Pointing (Index only) check
+                const isPointing = (fingersUp === 1 || fingersUp === 2) && lm[8].y < lm[6].y;
+
+                if (fingersUp >= 4) {
+                    STATE.mode = 'EXPAND';
+                    modeEl.innerText = "EXPANDING (OPEN)";
+                    modeEl.style.color = "#00ffff"; // Cyan
+                    material.color.setHex(0x00ffff);
+                } else if (isPointing) {
+                    STATE.mode = 'ATTRACT';
+                    modeEl.innerText = "GRAVITY WELL (POINT)";
+                    modeEl.style.color = "#FFD700"; // Gold
+                    material.color.setHex(0xFFD700);
+                    
+                    // Map finger tip to 3D space
+                    // X: 0..1 -> -5..5
+                    STATE.attractPoint.set(
+                        -(lm[8].x - 0.5) * 10,
+                        -(lm[8].y - 0.5) * 8,
+                        1 // Pull forward slightly
+                    );
+                } else if (fingersUp <= 1) {
+                    STATE.mode = 'COLLAPSE';
+                    modeEl.innerText = "COLLAPSING (FIST)";
+                    modeEl.style.color = "#ff0055"; // Red
+                    material.color.setHex(0xff0055);
+                } else {
+                    STATE.mode = 'IDLE';
+                    modeEl.innerText = "IDLE";
+                }
+
+            } else {
+                statusEl.innerText = "SCANNING...";
+                statusEl.className = "text-xs text-yellow-500 animate-pulse";
+                STATE.mode = 'IDLE';
+                document.getElementById('hand-count').innerText = "0";
+                
+                // Auto rotate when idle
+                STATE.handRotation.y = Math.sin(Date.now() * 0.0005) * 0.5;
+            }
+        }
+
+        // --- 6. PHYSICS LOOP ---
+        const clock = new THREE.Clock();
+        const fpsEl = document.getElementById('fps-display');
+        let frames = 0;
+        let lastTime = 0;
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const time = Date.now();
+            STATE.time += 0.01;
+            
+            // FPS Logic
+            frames++;
+            if (time - lastTime >= 1000) {
+                fpsEl.innerText = frames;
+                frames = 0;
+                lastTime = time;
+            }
+
+            // Smooth Camera Rotation
+            scene.rotation.y += (STATE.handRotation.y - scene.rotation.y) * 0.05;
+            scene.rotation.x += (STATE.handRotation.x - scene.rotation.x) * 0.05;
+
+            // Particle Updates
+            const positionsArr = geometry.attributes.position.array;
+            
+            for (let i = 0; i < CONFIG.particleCount; i++) {
+                const ix = i * 3;
+                let px = positionsArr[ix];
+                let py = positionsArr[ix+1];
+                let pz = positionsArr[ix+2];
+
+                // Get base target based on shape
+                let tx = targets[ix];
+                let ty = targets[ix+1];
+                let tz = targets[ix+2];
+
+                // Apply Mode Modifiers
+                if (STATE.mode === 'ATTRACT') {
+                    // Pull towards finger
+                    const dx = STATE.attractPoint.x - px;
+                    const dy = STATE.attractPoint.y - py;
+                    const dz = STATE.attractPoint.z - pz;
+                    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                    
+                    // Stronger pull when closer, but cap it to prevent shooting off
+                    const force = Math.min(0.2, 5.0 / (dist * dist + 0.1)); 
+                    
+                    px += dx * force * 0.05;
+                    py += dy * force * 0.05;
+                    pz += dz * force * 0.05;
+
+                    // Add Swirl
+                    px += Math.sin(STATE.time + i) * 0.02;
+                    py += Math.cos(STATE.time + i) * 0.02;
+
+                } else if (STATE.mode === 'EXPAND') {
+                    // Puff out
+                    tx *= 1.8; ty *= 1.8; tz *= 1.8;
+                    // Move towards expanded targe
